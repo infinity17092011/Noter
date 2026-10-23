@@ -1,18 +1,14 @@
 {
-  "name": "myjarvis-backend",
+  "name": "summerai",
   "version": "1.0.0",
-  "description": "MyJarvis backend: Supabase auth, PayPal subscriptions (no webhooks) and Groq summaries",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
-  },
-  "engines": {
-    "node": ">=18"
+  "private": true,
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.45.0",
-    "cors": "^2.8.5",
-    "express": "^4.19.2",
-    "express-rate-limit": "^7.4.0"
+    "@capacitor/android": "^6.2.0",
+    "@capacitor/camera": "^6.1.0",
+    "@capacitor/cli": "^6.2.0",
+    "@capacitor/core": "^6.2.0"
   }
 }
