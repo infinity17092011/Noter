@@ -30,6 +30,10 @@ const PAYPAL_BASE =
   PAYPAL_ENV === "live" ? "https://api-m.paypal.com" : "https://api-m.sandbox.paypal.com";
 const TABLE = "subscriptions"; // user_id (unique), paypal_subscription_id (unique), status, next_billing_time, last_checked
 const MAX_NOTES = 20000;
+// Emails that get free access (comma-separated in Render: FREE_ACCESS_EMAILS)
+const FREE_EMAILS = (process.env.FREE_ACCESS_EMAILS || process.env.FREE_ACCESS_EMAIL || process.env.FREE_EMAILS || process.env.FREE_EMAIL || "")
+  .split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+const isFree = (email) => !!email && FREE_EMAILS.includes(String(email).toLowerCase());
 const RECHECK_MS = 5 * 60 * 1000; // how stale a saved status may be before asking PayPal again
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
@@ -155,7 +159,8 @@ async function saveSubscription(userId, sub) {
 }
 
 // Returns { active, status, nextBillingTime }. Re-checks PayPal when the saved status is old.
-async function getAccess(userId, { force = false } = {}) {
+async function getAccess(userId, { force = false, email = "" } = {}) {
+  if (isFree(email)) return { active: true, status: "ACTIVE", nextBillingTime: null, free: true };
   const { data: row } = await supabase.from(TABLE).select("*").eq("user_id", userId).maybeSingle();
   if (!row) return { active: false, status: "NONE", nextBillingTime: null };
 
@@ -177,7 +182,7 @@ async function getAccess(userId, { force = false } = {}) {
 
 async function requireSubscription(req, res, next) {
   try {
-    const access = await getAccess(req.user.id);
+    const access = await getAccess(req.user.id, { email: req.user.email });
     if (!access.active) return res.status(402).json({ error: "Start your free trial to use MyJarvis.", status: access.status });
     next();
   } catch (e) {
@@ -214,7 +219,7 @@ app.post("/api/subscription/activate", requireUser, async (req, res) => {
 // Called when the app opens and on the Account screen. Always asks PayPal.
 app.get("/api/subscription/status", requireUser, async (req, res) => {
   try {
-    res.json(await getAccess(req.user.id, { force: true }));
+    res.json(await getAccess(req.user.id, { force: true, email: req.user.email }));
   } catch (e) {
     console.error(e);
     res.status(502).json({ error: "Couldn’t check your subscription." });
@@ -233,7 +238,7 @@ app.post("/api/subscription/cancel", requireUser, async (req, res) => {
       body: JSON.stringify({ reason: "Cancelled by user" }),
     });
     if (!r.ok && r.status !== 422) throw new Error("PayPal cancel failed (" + r.status + ")");
-    res.json(await getAccess(req.user.id, { force: true }));
+    res.json(await getAccess(req.user.id, { force: true, email: req.user.email }));
   } catch (e) {
     console.error(e);
     res.status(502).json({ error: "Couldn’t cancel right now. You can also cancel from your PayPal account." });
