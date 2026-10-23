@@ -54,6 +54,65 @@ async function requireUser(req, res, next) {
   next();
 }
 
+/* ---------- Auth routes (the page never talks to Supabase directly) ---------- */
+const authLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 30, message: { error: "Too many attempts. Please wait a few minutes." } });
+// A fresh client per request, so one person's login never leaks into the shared admin client.
+const authClient = () =>
+  createClient(SUPABASE_URL, process.env.SUPABASE_ANON_KEY || SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+const pack = (d) => ({
+  session: d.session
+    ? { access_token: d.session.access_token, refresh_token: d.session.refresh_token, expires_at: d.session.expires_at }
+    : null,
+  user: d.user ? { id: d.user.id, email: d.user.email } : null,
+});
+const validEmail = (e) => typeof e === "string" && /^\S+@\S+\.\S+$/.test(e) && e.length < 255;
+const validPassword = (p) => typeof p === "string" && p.length >= 6 && p.length < 200;
+
+app.post("/api/auth/signup", authLimit, async (req, res) => {
+  const { email, password } = req.body || {};
+  if (!validEmail(email) || !validPassword(password)) return res.status(400).json({ error: "Enter a valid email and a password of at least 6 characters." });
+  const { data, error } = await authClient().auth.signUp({ email: email.trim(), password });
+  if (error) return res.status(400).json({ error: error.message });
+  res.json(pack(data));
+});
+
+app.post("/api/auth/login", authLimit, async (req, res) => {
+  const { email, password } = req.body || {};
+  if (!validEmail(email) || typeof password !== "string") return res.status(400).json({ error: "Enter your email and password." });
+  const { data, error } = await authClient().auth.signInWithPassword({ email: email.trim(), password });
+  if (error) return res.status(401).json({ error: error.message });
+  res.json(pack(data));
+});
+
+app.post("/api/auth/refresh", async (req, res) => {
+  const token = String((req.body && req.body.refresh_token) || "");
+  if (!token) return res.status(400).json({ error: "Missing token." });
+  const { data, error } = await authClient().auth.refreshSession({ refresh_token: token });
+  if (error || !data.session) return res.status(401).json({ error: "Your session expired. Please sign in again." });
+  res.json(pack(data));
+});
+
+app.post("/api/auth/forgot", authLimit, async (req, res) => {
+  const { email, redirectTo } = req.body || {};
+  if (validEmail(email)) {
+    const target = typeof redirectTo === "string" && redirectTo.startsWith(ALLOWED_ORIGIN) ? redirectTo : undefined;
+    await authClient().auth.resetPasswordForEmail(email.trim(), { redirectTo: target });
+  }
+  res.json({ ok: true }); // same reply either way, so emails can't be probed
+});
+
+app.post("/api/auth/reset", authLimit, async (req, res) => {
+  const { access_token, password } = req.body || {};
+  if (!validPassword(password)) return res.status(400).json({ error: "Use at least 6 characters." });
+  const { data, error } = await supabase.auth.getUser(String(access_token || ""));
+  if (error || !data.user) return res.status(401).json({ error: "This reset link has expired. Request a new one." });
+  const { error: e2 } = await supabase.auth.admin.updateUserById(data.user.id, { password });
+  if (e2) return res.status(400).json({ error: e2.message });
+  res.json({ ok: true });
+});
+
 /* ---------- PayPal helpers ---------- */
 let ppToken = { value: null, expires: 0 };
 
